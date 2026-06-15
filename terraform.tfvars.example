@@ -1,0 +1,29 @@
+# Copy to terraform.tfvars and fill in real values. NEVER commit terraform.tfvars.
+
+# --- Auth (profile in ~/.oci/config; secrets are read from there) ---
+config_file_profile = "Profile1-macos"
+tenancy_ocid        = "ocid1.tenancy.oc1..example"
+region              = "us-ashburn-1"
+
+# --- Placement ---
+compartment_id            = "ocid1.compartment.oc1..example"
+availability_domain_index = 0 # try 1 or 2 if A1 capacity is unavailable
+
+# --- Access ---
+ssh_public_key   = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... you@host"
+ssh_ingress_cidr = "0.0.0.0/0" # tighten to "<your.ip>/32" for better security
+
+# --- Compute (maxed Always Free Arm + 2 AMD micros) ---
+a1_ocpus           = 2
+a1_memory_gbs      = 12
+a1_boot_volume_gbs = 100
+enable_micros      = true
+micro_count        = 2
+
+# --- Autonomous Databases ---
+adb_count          = 2
+adb_db_workload    = "OLTP"
+adb_admin_password = "ReplaceWithStrongPassw0rd" # 12-30 chars, upper+lower+number
+
+# --- Alerts ---
+notification_email = "you@example.com"

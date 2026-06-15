@@ -1,0 +1,23 @@
+# Terraform state (may contain secrets)
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl.bak
+crash.log
+crash.*.log
+
+# Variable files with real values
+*.tfvars
+*.tfvars.json
+!terraform.tfvars.example
+
+# Plan artifacts
+tfplan
+tfplan.json
+
+# Keys / secrets
+*.pem
+*.key
+
+# OS noise
+.DS_Store
