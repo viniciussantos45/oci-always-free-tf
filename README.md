@@ -37,6 +37,14 @@ brew install terraform jq oci-cli   # macOS
 
 Mantenha-a no **Always Free** — **não** faça upgrade para Pay-As-You-Go.
 
+> ⚠️ **Escolha sua home region com cuidado no cadastro — ela é permanente.** A Oracle define sua home
+> region quando você cria a conta e ela **nunca** pode ser alterada, e os **recursos Always Free
+> (A1/micros/ADB) só existem nessa home region** (assinar outras regiões depois *não* estende o Always
+> Free para elas). O Arm A1 é altamente disputado em regiões populares como Ashburn, então, se você está
+> criando uma conta nova e quer uma chance real de provisionar o A1, escolha uma **home region menos
+> concorrida que tenha capacidade de A1**. Este repositório está fixado em `us-ashburn-1`; para apontar
+> para outra home region você também precisa atualizar a validação de `region` no `variables.tf`.
+
 ### 3. Crie sua chave de API + config
 
 ```bash
@@ -150,6 +158,47 @@ Esperado: **14 recursos a adicionar**. Se o A1/micros falharem com `Out of host 
    - Console/CLI: o A1 mostra **2 OCPU / 12 GB**; ambos os ADBs estão `AVAILABLE` com `is_free_tier = true`.
    - `terraform plan` de novo → **No changes** (sem drift).
 
+## Acessar as instâncias
+
+Pegue os IPs públicos e os comandos SSH prontos pelos outputs:
+
+```bash
+terraform output micro_public_ips     # os dois micros AMD
+terraform output a1_ssh_command       # o A1 (quando existir)
+```
+
+A imagem é Ubuntu, então o **usuário de login é `ubuntu`** e a autenticação é sua `ssh_public_key`:
+
+```bash
+ssh ubuntu@<ip_publico>
+ssh -i ~/.ssh/sua_chave ubuntu@<ip_publico>   # se a chave não for a padrão
+```
+
+### Abrir portas e por que o `ping` dá timeout
+
+O tráfego de entrada passa por **dois** firewalls — **ambos** precisam permitir:
+
+```
+Internet ─▶ [security list OCI] ─▶ VM ─▶ [ufw / iptables] ─▶ sua aplicação
+             (network.tf)                 (dentro da instância)
+```
+
+Por padrão a security list (`network.tf`) permite de entrada **apenas**:
+- **TCP 22** (SSH) a partir de `ssh_ingress_cidr`
+- **ICMP type 3 code 4** (path-MTU) — necessário para a rede funcionar bem
+
+Todo o resto de entrada é bloqueado (a saída é totalmente liberada). Duas consequências importantes:
+
+- **O `ping` dá timeout por design.** O `ping` envia **ICMP type 8 (echo request)**, que não tem regra —
+  só type 3/4 é permitido. O SSH funciona porque o TCP 22 tem regra própria. Adicione uma regra de
+  ingress type 8 no `network.tf` se quiser que a máquina responda ping.
+- **Abrir uma porta (ex.: 80/443) exige editar o `network.tf`** + `terraform apply` — a security list da
+  nuvem é **obrigatória**. Um firewall de host como o `ufw` **não substitui** isso: o `ufw` fica *atrás*
+  da security list, então uma porta que a security list bloqueia nunca chega na VM. Depois de abrir na
+  security list, talvez você *também* precise liberar a porta dentro da VM, já que as imagens Ubuntu da
+  OCI vêm com iptables restritivo (`sudo ufw allow 443/tcp`, ou iptables + `netfilter-persistent save`).
+  **Sempre libere o SSH antes de ativar o `ufw`**, ou você se tranca para fora.
+
 ## Destruir tudo
 
 ```bash
@@ -176,6 +225,21 @@ tenta de novo até surgir capacidade:
 - **Tente em horários de baixa demanda** (madrugada/manhã cedo no horário local) — a capacidade abre.
 - Rodar `terraform apply` de novo só retenta as instâncias que falharam; o que já foi criado permanece.
 
+### Loop de retry automático
+
+O `scripts/retry-a1.sh` repete um apply **direcionado** (só o A1 — nunca mexe nos micros), alternando
+AD-3 → AD-1 → AD-2 a cada rodada até surgir um host Arm livre:
+
+```bash
+./scripts/retry-a1.sh                          # 270s entre rodadas, indefinidamente
+SLEEP_SECONDS=120 MAX_ROUNDS=50 ./scripts/retry-a1.sh
+```
+
+Ao ter sucesso, ele imprime o índice da AD vencedora — fixe-o em `a1_availability_domain_index` no
+`terraform.tfvars`. Ctrl-C para parar. A capacidade em Ashburn pode levar horas/dias; o loop só garante
+que você pegue assim que abrir. Continua nada depois de dias? Reduza para **1 OCPU / 6 GB**
+(`a1_ocpus=1`, `a1_memory_gbs=6`) — capacidade parcial é bem mais fácil de conseguir que os 2/12 cheios.
+
 ---
 
 ## FAQ
@@ -191,6 +255,15 @@ ambíguo da Oracle — não é problema de permissão. Confirme verificando se o
 `Out of host capacity` numa nova tentativa: se reportar, sua autorização de compute está ok e é só
 capacidade. (Só seria problema de policy de verdade se **todos** os serviços — inclusive os ADBs —
 falhassem com 404.)
+Para os **micros AMD**, isso costuma ser **específico da availability domain**: um micro que dá 404 numa
+AD sobe normalmente em outra. Se os micros derem 404, mude `availability_domain_index` (0/1/2) e rode
+apply de novo — no histórico deste repositório eles falharam na AD-2 mas subiram limpos na AD-1.
+
+**P: O SSH funciona mas o `ping` dá timeout.**
+Esperado — a security list permite ICMP **type 3/4** (path-MTU), mas não **type 8** (echo request, o que
+o `ping` usa). É uma escolha de configuração, não falha do servidor. Veja *Acessar as instâncias → Abrir
+portas* para adicionar a regra type 8. Mesma lógica para qualquer outra porta: abra primeiro no
+`network.tf`, depois (se necessário) dentro da VM.
 
 **P: `oci iam region list` retorna `401 NotAuthenticated`.**
 A chave pública de API não está registrada. Refaça o passo 4 da configuração (Console → My profile →
@@ -224,6 +297,15 @@ crie recursos pelo Console fora do Terraform** — mudanças manuais causam drif
 Não. Está fixado em `us-ashburn-1` (a validação força isso). Tenancies gratuitas são limitadas a uma
 única região home, e algumas escolhas aqui (ex.: excluir o NoSQL exclusivo de Phoenix) assumem Ashburn.
 
+**P: Posso trocar a região no Terraform para fugir do `Out of host capacity` do A1?**
+Não. Sua **home region é permanente** (definida no cadastro, nunca alterável), e os **recursos Always
+Free só existem na sua home region** — assinar outras regiões não estende o Always Free para lá (um A1
+em outra região seria **cobrado**). Então mudar `region` não transforma falta de capacidade em
+capacidade gratuita. Opções que continuam $0: continuar tentando na home region (`retry-a1.sh`, alternar
+ADs, fora de pico), reduzir para **1 OCPU / 6 GB**, ou criar uma conta gratuita **nova** com uma home
+region escolhida de forma mais estratégica — veja o passo 2 da configuração para escolher uma home region
+com capacidade de A1.
+
 **P: O apply foi parcial e eu mudei de ideia — como limpo?**
 `terraform destroy`. Ele remove o que estiver no state, inclusive de um apply parcial.
 
@@ -235,7 +317,7 @@ Não. Está fixado em `us-ashburn-1` (a validação força isso). Tenancies grat
 versions.tf      providers.tf     variables.tf     locals.tf
 data.tf          network.tf       compute.tf       database.tf
 observability.tf guardrails.tf    outputs.tf
-scripts/check-plan.sh   terraform.tfvars.example
+scripts/check-plan.sh   scripts/retry-a1.sh   terraform.tfvars.example
 ```
 
 ## Notas

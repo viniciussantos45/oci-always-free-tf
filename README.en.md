@@ -39,6 +39,14 @@ brew install terraform jq oci-cli   # macOS
 
 Keep it on **Always Free** — do **not** upgrade to Pay-As-You-Go.
 
+> ⚠️ **Choose your home region carefully at signup — it's permanent.** Oracle fixes your home region
+> when you create the account and it can **never** be changed, and **Always Free A1/micros/ADB only exist
+> in that home region** (subscribing to other regions later does *not* extend Always Free to them). The
+> Arm A1 is heavily oversubscribed in popular regions like Ashburn, so if you're creating a fresh account
+> and want a real shot at provisioning the A1, pick a **less-contested home region that has A1 capacity**.
+> This repo is pinned to `us-ashburn-1`; to target another home region you must also update the `region`
+> validation in `variables.tf`.
+
 ### 3. Create your API key + config
 
 ```bash
@@ -147,6 +155,40 @@ Expected: **14 resources to add**. If the A1/micros fail with `Out of host capac
    - Console/CLI: A1 shows **2 OCPU / 12 GB**; both ADBs are `AVAILABLE` with `is_free_tier = true`.
    - `terraform plan` again → **No changes** (no drift).
 
+## Accessing your instances
+
+Get the public IPs and ready-made SSH commands from outputs:
+
+```bash
+terraform output micro_public_ips     # the two AMD micros
+terraform output a1_ssh_command       # the A1 (once it exists)
+```
+
+The image is Ubuntu, so the **login user is `ubuntu`** and auth is your `ssh_public_key`:
+
+```bash
+ssh ubuntu@<public_ip>
+ssh -i ~/.ssh/your_key ubuntu@<public_ip>   # if the key isn't your default
+```
+
+### Opening ports & why `ping` times out
+
+Inbound traffic crosses **two** firewalls — **both** must allow it:
+
+```
+Internet ─▶ [OCI security list] ─▶ VM ─▶ [ufw / iptables] ─▶ your app
+             (network.tf)                 (inside the instance)
+```
+
+By default the security list (`network.tf`) allows inbound **only**:
+- **TCP 22** (SSH) from `ssh_ingress_cidr`
+- **ICMP type 3 code 4** (path-MTU) — needed for healthy networking
+
+Everything else inbound is blocked (egress is fully open). Two consequences worth knowing:
+
+- **`ping` times out by design.** `ping` sends **ICMP type 8 (echo request)**, which has no rule — only type 3/4 is allowed. SSH works because TCP 22 has its own rule. Add a type-8 ingress rule to `network.tf` if you want the box pingable.
+- **Opening a port (e.g. 80/443) requires editing `network.tf`** + `terraform apply` — the cloud security list is **mandatory**. A host firewall like `ufw` **cannot replace it**: `ufw` sits *behind* the security list, so a port the security list drops never reaches the VM. After opening the security list you may *also* need to allow the port inside the VM, since OCI's Ubuntu images ship restrictive iptables (`sudo ufw allow 443/tcp`, or iptables + `netfilter-persistent save`). **Always allow SSH before enabling `ufw`** or you'll lock yourself out.
+
 ## Tear down
 
 ```bash
@@ -170,6 +212,21 @@ no free Arm host at that moment. There is **no code fix** — you retry until ca
 - **Retry off-peak** (late night / early morning local time) — capacity frees up.
 - Re-running `terraform apply` only re-attempts the failed instances; already-created resources stay.
 
+### Automated retry loop
+
+`scripts/retry-a1.sh` loops a **targeted** apply (A1 only — never touches your micros), cycling
+AD-3 → AD-1 → AD-2 each round until a free Arm host appears:
+
+```bash
+./scripts/retry-a1.sh                          # 270s between rounds, forever
+SLEEP_SECONDS=120 MAX_ROUNDS=50 ./scripts/retry-a1.sh
+```
+
+On success it prints the winning AD index — pin it as `a1_availability_domain_index` in
+`terraform.tfvars`. Ctrl-C to stop. Capacity in Ashburn can take hours to days; the loop just grabs it
+the instant it frees up. Still nothing after days? Drop to **1 OCPU / 6 GB** (`a1_ocpus=1`,
+`a1_memory_gbs=6`) — partial capacity is far easier to land than the full 2/12.
+
 ---
 
 ## FAQ
@@ -183,6 +240,15 @@ For Always Free shapes this is almost always the **same capacity shortage** surf
 ambiguous error — not a permissions problem. Confirm by checking whether the A1 reports
 `Out of host capacity` on a retry: if it does, your compute auth is fine and it's purely capacity. (It
 would only be a real policy issue if **every** service — including the ADBs — failed with 404.)
+For the **AMD micros** this is frequently **availability-domain-specific**: a micro that 404s in one AD
+launches fine in another. If the micros 404, change `availability_domain_index` (0/1/2) and re-apply —
+in this repo's history they failed in AD-2 but came up cleanly in AD-1.
+
+**Q: SSH works but `ping` times out.**
+Expected — the security list allows ICMP **type 3/4** (path-MTU) but not **type 8** (echo request, what
+`ping` uses). It's a config choice, not a server fault. See *Accessing your instances → Opening ports*
+to add a type-8 rule. Same idea for any other port: open it in `network.tf` first, then (if needed)
+inside the VM.
 
 **Q: `oci iam region list` returns `401 NotAuthenticated`.**
 The API public key isn't registered. Re-do Setup step 4 (Console → My profile → API keys → Add API
@@ -217,6 +283,14 @@ incur charges.
 No. It's pinned to `us-ashburn-1` (validation enforces it). Free tenancies are limited to one home
 region, and some choices here (e.g. excluding Phoenix-only NoSQL) assume Ashburn.
 
+**Q: Can I switch region in Terraform to dodge A1 `Out of host capacity`?**
+No. Your **home region is permanent** (fixed at signup, never changeable), and **Always Free resources
+only exist in your home region** — subscribing to other regions doesn't extend Always Free there (an A1
+elsewhere would be **billable**). So changing `region` can't turn a capacity shortage into free capacity.
+Options that stay $0: keep retrying in your home region (`retry-a1.sh`, cycle ADs, off-peak), drop to
+**1 OCPU / 6 GB**, or create a **new** free account whose home region you pick more strategically — see
+Setup step 2 for choosing a home region with A1 capacity.
+
 **Q: Apply succeeded partially and then I changed my mind — how do I clean up?**
 `terraform destroy`. It removes whatever is in state, even from a partial apply.
 
@@ -228,7 +302,7 @@ region, and some choices here (e.g. excluding Phoenix-only NoSQL) assume Ashburn
 versions.tf      providers.tf     variables.tf     locals.tf
 data.tf          network.tf       compute.tf       database.tf
 observability.tf guardrails.tf    outputs.tf
-scripts/check-plan.sh   terraform.tfvars.example
+scripts/check-plan.sh   scripts/retry-a1.sh   terraform.tfvars.example
 ```
 
 ## Notes
