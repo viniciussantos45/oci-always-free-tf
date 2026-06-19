@@ -56,6 +56,10 @@ resource "oci_core_instance" "micro" {
     assign_public_ip = true
     display_name     = "${var.name_prefix}-micro-${count.index + 1}-vnic"
     hostname_label   = "afmicro${count.index + 1}"
+    # Required for the Tailscale exit node: OCI's default source/dest check
+    # drops packets whose source IP isn't the VNIC's own, which kills traffic
+    # forwarded from tailscale0 out through ens3.
+    skip_source_dest_check = true
   }
 
   metadata = {
