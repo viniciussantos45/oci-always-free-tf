@@ -1,6 +1,6 @@
 # Maxed Always Free Arm server: 2 OCPU / 12 GB (the current ceiling as of 2026-06-15).
 resource "oci_core_instance" "a1" {
-  availability_domain = local.availability_domain
+  availability_domain = local.a1_availability_domain
   compartment_id      = var.compartment_id
   display_name        = "${var.name_prefix}-a1"
   shape               = var.a1_shape

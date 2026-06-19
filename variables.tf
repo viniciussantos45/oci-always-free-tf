@@ -42,6 +42,17 @@ variable "availability_domain_index" {
   }
 }
 
+variable "a1_availability_domain_index" {
+  type        = number
+  description = "AD for the A1 server (0,1,2). Set independently so you can hunt A1 capacity without recreating the micros. null = follow availability_domain_index."
+  default     = null
+
+  validation {
+    condition     = var.a1_availability_domain_index == null || (var.a1_availability_domain_index >= 0 && var.a1_availability_domain_index <= 2)
+    error_message = "Ashburn has 3 availability domains: use 0, 1, or 2 (or null to follow availability_domain_index)."
+  }
+}
+
 variable "name_prefix" {
   type        = string
   description = "Prefix applied to all resource display names."

@@ -6,6 +6,9 @@ data "oci_identity_availability_domains" "ads" {
 
 locals {
   availability_domain = data.oci_identity_availability_domains.ads.availability_domains[var.availability_domain_index].name
+
+  # The A1 can hunt capacity in a different AD than the micros without recreating them.
+  a1_availability_domain = data.oci_identity_availability_domains.ads.availability_domains[coalesce(var.a1_availability_domain_index, var.availability_domain_index)].name
 }
 
 # Latest Ubuntu 22.04 image compatible with the Arm A1 shape (aarch64).
