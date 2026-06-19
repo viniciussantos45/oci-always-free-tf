@@ -169,6 +169,12 @@ variable "micro_count" {
   }
 }
 
+variable "micro_skip_source_dest_check" {
+  type        = bool
+  description = "Disable the VNIC source/destination check on the micro instances. Required for routing/NAT roles such as a Tailscale exit node or subnet router. Leave false unless the instance forwards traffic; enabling it shifts anti-spoofing to the host firewall."
+  default     = false
+}
+
 # ---------------------------------------------------------------------------
 # Autonomous Database
 # ---------------------------------------------------------------------------

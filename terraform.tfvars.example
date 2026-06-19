@@ -19,6 +19,7 @@ a1_memory_gbs      = 12
 a1_boot_volume_gbs = 100
 enable_micros      = true
 micro_count        = 2
+# micro_skip_source_dest_check = true # set true only if a micro forwards traffic (Tailscale exit node / subnet router)
 
 # --- Autonomous Databases ---
 adb_count          = 2
